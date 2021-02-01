@@ -1,0 +1,75 @@
+train_X.shape:(105549, 60, 35), train_y.shape:(105549,)
+
+test_X.shape:(26343, 60, 35), test_y.shape:(26343,)
+
+_________________________________________________________________
+Layer (type)                 Output Shape              Param #   
+=================================================================
+lstm_1 (LSTM)                (None, 50)                17200     
+_________________________________________________________________
+dense_1 (Dense)              (None, 1)                 51        
+=================================================================
+Total params: 17,251
+Trainable params: 17,251
+Non-trainable params: 0
+_________________________________________________________________
+None
+Train on 84439 samples, validate on 21110 samples
+Epoch 1/5
+2021-01-26 02:47:21.375358: I tensorflow/core/platform/cpu_feature_guard.cc:141] Your CPU supports instructions that this TensorFlow binary was not compiled to use: AVX2 FMA
+2021-01-26 02:47:24.717880: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1432] Found device 0 with properties: 
+name: GeForce GTX 1080 Ti major: 6 minor: 1 memoryClockRate(GHz): 1.582
+pciBusID: 0000:02:00.0
+totalMemory: 10.92GiB freeMemory: 10.76GiB
+2021-01-26 02:47:25.031431: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1432] Found device 1 with properties: 
+name: GeForce GTX 1080 Ti major: 6 minor: 1 memoryClockRate(GHz): 1.582
+pciBusID: 0000:03:00.0
+totalMemory: 10.92GiB freeMemory: 10.76GiB
+2021-01-26 02:47:25.340130: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1432] Found device 2 with properties: 
+name: GeForce GTX 1080 Ti major: 6 minor: 1 memoryClockRate(GHz): 1.582
+pciBusID: 0000:82:00.0
+totalMemory: 10.92GiB freeMemory: 10.76GiB
+2021-01-26 02:47:25.660229: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1432] Found device 3 with properties: 
+name: GeForce GTX 1080 Ti major: 6 minor: 1 memoryClockRate(GHz): 1.582
+pciBusID: 0000:83:00.0
+totalMemory: 10.92GiB freeMemory: 10.76GiB
+2021-01-26 02:47:25.662873: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1511] Adding visible gpu devices: 0, 1, 2, 3
+2021-01-26 02:47:26.502552: I tensorflow/core/common_runtime/gpu/gpu_device.cc:982] Device interconnect StreamExecutor with strength 1 edge matrix:
+2021-01-26 02:47:26.502615: I tensorflow/core/common_runtime/gpu/gpu_device.cc:988]      0 1 2 3 
+2021-01-26 02:47:26.502625: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1001] 0:   N Y N N 
+2021-01-26 02:47:26.502631: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1001] 1:   Y N N N 
+2021-01-26 02:47:26.502640: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1001] 2:   N N N Y 
+2021-01-26 02:47:26.502661: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1001] 3:   N N Y N 
+2021-01-26 02:47:26.503457: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1115] Created TensorFlow device (/job:localhost/replica:0/task:0/device:GPU:0 with 10405 MB memory) -> physical GPU (device: 0, name: GeForce GTX 1080 Ti, pci bus id: 0000:02:00.0, compute capability: 6.1)
+2021-01-26 02:47:26.503922: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1115] Created TensorFlow device (/job:localhost/replica:0/task:0/device:GPU:1 with 10405 MB memory) -> physical GPU (device: 1, name: GeForce GTX 1080 Ti, pci bus id: 0000:03:00.0, compute capability: 6.1)
+2021-01-26 02:47:26.504308: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1115] Created TensorFlow device (/job:localhost/replica:0/task:0/device:GPU:2 with 10405 MB memory) -> physical GPU (device: 2, name: GeForce GTX 1080 Ti, pci bus id: 0000:82:00.0, compute capability: 6.1)
+2021-01-26 02:47:26.504671: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1115] Created TensorFlow device (/job:localhost/replica:0/task:0/device:GPU:3 with 10405 MB memory) -> physical GPU (device: 3, name: GeForce GTX 1080 Ti, pci bus id: 0000:83:00.0, compute capability: 6.1)
+84439/84439 [==============================] - 256s 3ms/step - loss: 0.0018 - acc: 0.0000e+00 - val_loss: 1.0541e-06 - val_acc: 0.0000e+00
+
+Epoch 00001: val_loss improved from inf to 0.00000, saving model to /home/liushaozhe/saved_models/model_01-0.00.hdf5
+Epoch 2/5
+84439/84439 [==============================] - 250s 3ms/step - loss: 1.0939e-06 - acc: 0.0000e+00 - val_loss: 2.2522e-07 - val_acc: 0.0000e+00
+
+Epoch 00002: val_loss improved from 0.00000 to 0.00000, saving model to /home/liushaozhe/saved_models/model_02-0.00.hdf5
+Epoch 3/5
+84439/84439 [==============================] - 246s 3ms/step - loss: 9.1183e-07 - acc: 0.0000e+00 - val_loss: 2.3632e-07 - val_acc: 0.0000e+00
+
+Epoch 00003: val_loss did not improve from 0.00000
+Epoch 4/5
+84439/84439 [==============================] - 245s 3ms/step - loss: 3.6825e-07 - acc: 0.0000e+00 - val_loss: 2.6366e-07 - val_acc: 0.0000e+00
+
+Epoch 00004: val_loss did not improve from 0.00000
+Epoch 5/5
+84439/84439 [==============================] - 246s 3ms/step - loss: 3.0535e-07 - acc: 0.0000e+00 - val_loss: 1.8522e-07 - val_acc: 0.0000e+00
+
+Epoch 00005: val_loss improved from 0.00000 to 0.00000, saving model to /home/liushaozhe/saved_models/model_05-0.00.hdf5
+Saved trained model at /home/liushaozhe/saved_models/keras_ETF_trained_model.h5 
+[0.00042223 0.00044249 0.00046548 ... 0.000414   0.00028045 0.00053569]
+The train acc is 0.774872
+[0.0003318  0.00034974 0.00038143 ... 0.00039501 0.00030496 0.00038008]
+The test acc is 0.791975
+20964  y_true > 0
+5379   y_true < 0
+26060  y_predict > 0
+283   y_predict < 0
+Process finished with exit code 0
