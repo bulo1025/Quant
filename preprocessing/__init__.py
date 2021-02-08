@@ -1,1 +1,1 @@
-from .data_loader import data_transfer
+from .data_loader import load_data_with_featureselect

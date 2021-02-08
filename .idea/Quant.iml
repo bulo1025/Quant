@@ -5,4 +5,7 @@
     <orderEntry type="jdk" jdkName="Remote Python 3.6.2 (sftp://root@175.25.50.115:11612/root/anaconda3/envs/tensorflow/bin/python3.6)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
+  <component name="PyDocumentationSettings">
+    <option name="renderExternalDocumentation" value="true" />
+  </component>
 </module>

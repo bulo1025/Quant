@@ -1,5 +1,4 @@
 import numpy as np
-import pandas as pd
 import os
 from pathlib import Path
 import matplotlib.pyplot as plt
@@ -13,11 +12,40 @@ import keras
 # import keras.backend as K
 from keras.callbacks import ModelCheckpoint
 from keras.layers import Dropout
+import pandas as pd
+from sklearn.feature_selection import SelectKBest,f_regression
+
+def load_data_with_featureselect(data,k = 20):
+    X = data.iloc[:,:-1].values
+    y = data.iloc[:,-1].values
+    X_new = SelectKBest(score_func=f_regression, k=k).fit_transform(X, y)
+    X_new = pd.DataFrame(X_new)
+    y = pd.DataFrame(y)
+    ret_data = pd.concat([X_new,y],axis = 1)
+    return ret_data
+data_list = ['0512880.csv','0510050.csv','0510500.csv','1159995.csv']
+# data_list = ['0510500.csv']
+# data_target = '510050.XSHG.csv'
+
+# data = pd.read_csv('/home/liushaozhe/dataSet/Clean_data/' + data_target)
+# print(data.shape)
+# # data = data_loader.data_transfer(data)
+# # print(data.shape)
+# # data = data_loader.stock_data_transfer(data)
+# # print(data.shape)
+# # features,target = data_loader.input_data_generator(data,time_window)
+# # features = np.reshape(features, (features.shape[0],features.shape[1],features_num))
+# # features = features.reshape(-1,time_window,features_num)
+# # print(features[0:5])
+# train_seq = data.iloc[:int(TRAIN_TEST_RATIO * data.shape[0]), :].values
+# test_seq = data.iloc[int(TRAIN_TEST_RATIO * data.shape[0]):, :].values
+
 
 class MultiInputModels:
     '''
     时间序列LSTM模型
     '''
+
     def __init__(self, train_seq, test_seq, sw_width, batch_size, epochs_num, verbose_set):
         '''
         初始化变量和参数
@@ -28,6 +56,7 @@ class MultiInputModels:
         self.batch_size = batch_size
         self.epochs_num = epochs_num
         self.verbose_set = verbose_set
+
         self.train_X, self.train_y = [], []
         self.test_X, self.test_y = [], []
 
@@ -48,7 +77,6 @@ class MultiInputModels:
             # [i:end_index, :-1] 截取第i行到第end_index-1行、除最后一列之外的列的数据；
             # [end_index-1, -1] 截取第end_index-1行、最后一列的单个数据，其实是在截取期望预测值y；
             # seq_x, seq_y = self.train_seq[i:end_index, 1:], self.train_seq[end_index - 1, 0]
-            # 这里由于列名的缘故
             seq_x, seq_y = self.train_seq[i:end_index, 1:-1], self.train_seq[end_index - 1, -1]
             scaler = MinMaxScaler().fit(seq_x)
             seq_x = scaler.transform(seq_x)
@@ -77,13 +105,12 @@ class MultiInputModels:
         print('test_X.shape:{}, test_y.shape:{}\n'.format(self.test_X.shape, self.test_y.shape))
         return self.train_X, self.train_y, self.test_X, self.test_y, self.features
 
-    def vanilla_lstm(self, save_dir,model_name):
+    def vanilla_lstm(self, save_dir):
         model = Sequential()
-        model.add(LSTM(25, activation='relu',
-                       input_shape=(self.sw_width, self.features)))
-        # model.add(LSTM(20, activation='relu',
-        #                input_shape=(self.sw_width, self.features), return_sequences=True))
-        # model.add(LSTM(5, activation='tanh', return_sequences=False))
+        model.add(LSTM(20, activation='relu',
+                       input_shape=(self.sw_width, self.features), return_sequences=True))
+        model.add(Dropout(0.1))
+        model.add(LSTM(10, activation='tanh', return_sequences=False))
         # model.add(LSTM(64, activation='relu',return_sequences=False))
         model.add(Dense(1))
         # def trend_accuracy(y_true,y_pred):
@@ -100,8 +127,19 @@ class MultiInputModels:
         filepath = "model_{epoch:02d}-{val_loss:.7f}-{val_mean_absolute_error:.7f}.hdf5"
         checkpoint = ModelCheckpoint(os.path.join(save_dir, filepath), monitor='val_loss', verbose=1,
                                      save_best_only=True)
+
         history = model.fit(self.train_X, self.train_y, batch_size=512, epochs=self.epochs_num, validation_split=0.2,
                             verbose=self.verbose_set, callbacks=[checkpoint])
+        # y_pred = model.predict(self.train_X).squeeze(axis = 1)  # 降低维度
+        # y_true = self.train_y
+        # # print(y_pred)
+        # train_results = np.sign(y_pred * y_true)
+        # cor = 0
+        # for x in train_results:
+        #     if x > 0:
+        #         cor += 1
+        # acc = cor * 1.0 / len(train_results)
+        # print("The train acc is %f" % acc)
         y_pred = model.predict(self.test_X).squeeze(axis=1)  # 降低维度
         y_true = self.test_y
         # print(y_pred)
@@ -141,6 +179,10 @@ class MultiInputModels:
             target_DF['y_pred'] = y_pred
             target_DF['y_true'] = y_true
             # target_DF = target_DF[(target_DF['y_pred'] > 0.0015) & (target_DF['y_pred'] < 0.015)]
+            # print(len(y_true[y_true > 0]))
+            # print(len(y_true[y_true < 0]))
+            # print(len(y_pred[y_pred > 0]))
+            # print(len(y_pred[y_pred < 0]))
             plt.figure(figsize=(8, 8), dpi=200)
             plt.scatter(target_DF['y_pred'], target_DF['y_true'], s=30)
             plt.title('y_pred VS y_true', fontsize=12)
@@ -158,5 +200,38 @@ class MultiInputModels:
             with open(save_dir + '/' + "result.txt", "w") as f:
                 f.write("The test acc is %f" % acc)
             print("The test acc is %f" % acc)
+
+save_dir = '/home/liushaozhe/saved_models_layer2'
+sw_width = 60   # 三分钟数据
+batch_size = 512
+epochs_num = 30
+verbose_set = 1
+TRAIN_TEST_RATIO = 0.8
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
+# save_dir = os.path.join(os.getcwd(), 'saved_models')
+for i in data_list:
+    save_dir = '/home/liushaozhe/saved_models_layer2'
+    file = Path(save_dir + '/' + str(i.split('.')[0]))
+    if file.exists():
+        pass
+    else:
+        os.mkdir(file)
+    save_dir = os.path.join(save_dir,str(i.split('.')[0]))
+    data = pd.read_csv('/home/liushaozhe/dataSet/clean_data_save/' + i,index_col = 'Time')
+    data = data.drop('weighted_price', axis=1)
+    # 直接load所有features
+    # train_seq = data.iloc[:int(TRAIN_TEST_RATIO * data.shape[0]), :].values
+    # test_seq = data.iloc[int(TRAIN_TEST_RATIO * data.shape[0]):, :].values
+    # 进行feature selection后
+    data = load_data_with_featureselect(data, 20)
+    train_seq = data.iloc[:int(TRAIN_TEST_RATIO * data.shape[0]), :].values
+    test_seq = data.iloc[int(TRAIN_TEST_RATIO * data.shape[0]):, :].values
+    model_name = 'keras_ETF_trained_model.h5'
+    MultiInputLSTM = MultiInputModels(train_seq, test_seq, sw_width, batch_size, epochs_num, verbose_set)
+    MultiInputLSTM.split_sequence_multi_input()
+    MultiInputLSTM.vanilla_lstm(save_dir)
+    MultiInputLSTM.load_model_test(save_dir, model_name)
+    print('Finish one file')
+print('end')
 
 

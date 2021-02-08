@@ -1,8 +1,6 @@
-from preprocessing import data_loader
 import numpy as np
 import os
-from scipy.stats import randint as sp_randint
-from scipy.stats import uniform
+from pathlib import Path
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import MinMaxScaler
@@ -10,41 +8,34 @@ from keras.models import Sequential
 from keras.layers import Dense
 from keras.layers import LSTM
 import keras
-import tensorflow as tf
-import keras.backend as K
+# import tensorflow as tf
+# import keras.backend as K
 from keras.callbacks import ModelCheckpoint
 from keras.layers import Dropout
 import pandas as pd
-from sklearn.model_selection import RandomizedSearchCV
-from keras.wrappers.scikit_learn import KerasClassifier
 
-data_target = '510050.XSHG.csv'
-# data_target = 'my.csv'
-# time_window = 60
-# future_target = 40
-features_num = 35
-TRAIN_TEST_RATIO = 0.8
+data_list = ['0512880.csv','0510050.csv','0510500.csv','1159995.csv']
 
-data = pd.read_csv('/home/liushaozhe/dataSet/' + data_target)
-print(data.shape)
-data = data_loader.data_transfer(data)
-print(data.shape)
-# data = data_loader.stock_data_transfer(data)
-# print(data.shape)
-# features,target = data_loader.input_data_generator(data,time_window)
-# features = np.reshape(features, (features.shape[0],features.shape[1],features_num))
-# features = features.reshape(-1,time_window,features_num)
-# print(features[0:5])
-train_seq = data.iloc[:int(TRAIN_TEST_RATIO * data.shape[0]), :].values
-test_seq = data.iloc[int(TRAIN_TEST_RATIO * data.shape[0]):, :].values
+from sklearn.feature_selection import SelectKBest,f_regression
 
+def load_data_with_featureselect(data,flag = True,k = 20):
+    pd.read_csv('/home/liushaozhe/dataSet/clean_data_save/' + i, index_col='Time')
+    data = data.drop('weighted_price', axis=1)
+    if flag == True:
+        X = data.iloc[:,:-1].values
+        y = data.iloc[:,-1].values
+        X_new = SelectKBest(score_func=f_regression, k=k).fit_transform(X, y)
+        X_new = pd.DataFrame(X_new)
+        y = pd.DataFrame(y)
+        data = pd.concat([X_new,y],axis = 1)
+    return data
 
 class MultiInputModels:
     '''
     时间序列LSTM模型
     '''
 
-    def __init__(self, train_seq, test_seq, sw_width, batch_size, epochs_num,save_dir,verbose_set):
+    def __init__(self, train_seq, test_seq, sw_width, batch_size, epochs_num, verbose_set):
         '''
         初始化变量和参数
         '''
@@ -54,7 +45,7 @@ class MultiInputModels:
         self.batch_size = batch_size
         self.epochs_num = epochs_num
         self.verbose_set = verbose_set
-        self.save_dir = save_dir
+
         self.train_X, self.train_y = [], []
         self.test_X, self.test_y = [], []
 
@@ -63,7 +54,7 @@ class MultiInputModels:
         该函数实现多输入序列数据的样本划分
         '''
         # ------- 训练输入数据的样本划分------------#
-        scaler = StandardScaler()  # 标准化转换
+        # scaler = MinMaxScaler()  # 标准化转换
         for i in range(len(self.train_seq)):
             # 找到最后一个元素的索引，因为for循环中i从1开始，切片索引从0开始，切片区间前闭后开，所以不用减去1；
             end_index = i + self.sw_width
@@ -74,8 +65,10 @@ class MultiInputModels:
             # 实现以滑动步长为1（因为是for循环），窗口宽度为self.sw_width的滑动步长取值；
             # [i:end_index, :-1] 截取第i行到第end_index-1行、除最后一列之外的列的数据；
             # [end_index-1, -1] 截取第end_index-1行、最后一列的单个数据，其实是在截取期望预测值y；
-            seq_x, seq_y = self.train_seq[i:end_index, :-1], self.train_seq[end_index - 1, -1]
-            scaler_data = scaler.fit(seq_x)
+            # seq_x, seq_y = self.train_seq[i:end_index, 1:], self.train_seq[end_index - 1, 0]
+            # 这里由于列名的缘故
+            seq_x, seq_y = self.train_seq[i:end_index, 1:-1], self.train_seq[end_index - 1, -1]
+            scaler = MinMaxScaler().fit(seq_x)
             seq_x = scaler.transform(seq_x)
             self.train_X.append(seq_x)
             self.train_y.append(seq_y)
@@ -92,8 +85,8 @@ class MultiInputModels:
             # 实现以滑动步长为1（因为是for循环），窗口宽度为self.sw_width的滑动步长取值；
             # [i:end_index, :-1] 截取第i行到第end_index-1行、除最后一列之外的列的数据；
             # [end_index-1, -1] 截取第end_index-1行、最后一列的单个数据，其实是在截取期望预测值y；
-            seq_x, seq_y = self.test_seq[i:end_index, :-1], self.test_seq[end_index - 1, -1]
-            scaler_data = scaler.fit(seq_x)
+            seq_x, seq_y = self.test_seq[i:end_index, 1:-1], self.test_seq[end_index - 1, -1]
+            scaler = MinMaxScaler().fit(seq_x)
             seq_x = scaler.transform(seq_x)
             self.test_X.append(seq_x)
             self.test_y.append(seq_y)
@@ -102,29 +95,13 @@ class MultiInputModels:
         print('test_X.shape:{}, test_y.shape:{}\n'.format(self.test_X.shape, self.test_y.shape))
         return self.train_X, self.train_y, self.test_X, self.test_y, self.features
 
-    def lstm_model(self,layer_size,test_batch,test_epochs_num,lr):
+    def vanilla_lstm(self, save_dir):
         model = Sequential()
-        model.add(LSTM(layer_size[0], activation='relu',
-                       input_shape=(self.sw_width, self.features), return_sequences=True))
-        for i in layer_size[1:-1]:
-            model.add(LSTM(i, activation='relu',return_sequences=True))
-        model.add(LSTM(layer_size[-1], activation='tanh', return_sequences=False))
-        model.add(Dense(1))
-        keras.optimizers.Adam(lr=lr, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
-        # mean_absolute_error
-        model.compile(optimizer='adam', loss='mse', metrics=['acc'])
-        # print(model.summary())
-        history = model.fit(self.train_X, self.train_y, batch_size=test_batch, epochs=test_epochs_num, validation_split=0.2,
-                            verbose=self.verbose_set)
-        return model
-
-    def vanilla_lstm(self):
-        model = Sequential()
-        # model.add(LSTM(50, activation='relu',
-        #                input_shape=(self.sw_width, self.features)))
-        model.add(LSTM(20, activation='relu',
-                       input_shape=(self.sw_width, self.features), return_sequences=True))
-        model.add(LSTM(64, activation='tanh', return_sequences=False))
+        model.add(LSTM(25, activation='relu',
+                       input_shape=(self.sw_width, self.features)))
+        # model.add(LSTM(20, activation='relu',
+        #                input_shape=(self.sw_width, self.features), return_sequences=True))
+        # model.add(LSTM(5, activation='tanh', return_sequences=False))
         # model.add(LSTM(64, activation='relu',return_sequences=False))
         model.add(Dense(1))
         # def trend_accuracy(y_true,y_pred):
@@ -138,8 +115,8 @@ class MultiInputModels:
         model.compile(optimizer='adam', loss='mse', metrics=['mean_absolute_error'])
         print(model.summary())
         # filepath = "model_{epoch:02d}-{val_loss:.2f}-{val_trend_accuracy:.2f}.hdf5"
-        filepath = "model_{epoch:02d}-{val_loss:.2f}-{val_mean_absolute_error:.2f}.hdf5"
-        checkpoint = ModelCheckpoint(os.path.join(self.save_dir, filepath), monitor='val_mean_absolute_error', verbose=1,
+        filepath = "model_{epoch:02d}-{val_loss:.7f}-{val_mean_absolute_error:.7f}.hdf5"
+        checkpoint = ModelCheckpoint(os.path.join(save_dir, filepath), monitor='val_loss', verbose=1,
                                      save_best_only=True)
 
         history = model.fit(self.train_X, self.train_y, batch_size=512, epochs=self.epochs_num, validation_split=0.2,
@@ -179,9 +156,10 @@ class MultiInputModels:
         plt.ylabel('loss')
         plt.xlabel('epoch')
         plt.legend(['train', 'validation'], loc='upper right')
+        plt.savefig(save_dir +'/' + 'loss.jpg')
         plt.show()
 
-    def load_model(self, save_dir, model_name, train_flag=0):
+    def load_model_test(self, save_dir, model_name, train_flag=0):
         model = keras.models.load_model(save_dir + '/' + model_name)
         if train_flag:
             model.fit(self.train_X, self.train_y)
@@ -196,11 +174,13 @@ class MultiInputModels:
             # print(len(y_true[y_true < 0]))
             # print(len(y_pred[y_pred > 0]))
             # print(len(y_pred[y_pred < 0]))
+            plt.figure(figsize=(8, 8), dpi=200)
             plt.scatter(target_DF['y_pred'], target_DF['y_true'], s=30)
-            plt.title('y_pred VS y_true', fontsize=24)
-            plt.xlabel('y_pred', fontsize=14)
-            plt.ylabel('y_true', fontsize=14)
-            plt.axis([-0.001, 0.002, -0.001, 0.002])
+            plt.title('y_pred VS y_true', fontsize=12)
+            plt.xlabel('y_pred', fontsize=12)
+            plt.ylabel('y_true', fontsize=12)
+            # plt.axis([-0.001, 0.002, -0.001, 0.002])
+            plt.savefig(save_dir + '/' +'y_predVSy_true.jpg')
             plt.show()
             test_results = np.sign(y_pred * y_true)
             cor = 0
@@ -208,66 +188,42 @@ class MultiInputModels:
                 if x > 0:
                     cor += 1
             acc = cor * 1.0 / len(test_results)
+            with open(save_dir + '/' + "result.txt", "w") as f:
+                f.write("The test acc is %f" % acc)
             print("The test acc is %f" % acc)
-    def Random_search_LSTM(self):
-        # 使用包装器创建model
-        model_init_batch_epoch_CV = KerasClassifier(build_fn=self.lstm_model, verbose=1)
-        # 'layer_size': [(sp_randint.rvs(5, 20, 1), sp_randint.rvs(5, 20, 1),),
-        #                (sp_randint.rvs(5, 20, 1),),
-        #                (sp_randint.rvs(5, 20, 1), sp_randint.rvs(5, 20, 1), sp_randint.rvs(5, 20, 1))],
-        parameter_space = { 'layer_size': [(1,2)],
-                            'test_batch': [512],
-                            'test_epochs_num': [5],
-                            'lr':[0.1]}
 
-        # 注意，前面我们知道x_train的样本数为60000，传入x_train做训练时，因为cv=3，
-        # 因此会划分为3个20000，即对应每个参数组合，只会训练40000个样本，另外20000样本做为测试，
-        # 作为准确率参考。最后取3次训练的测试准确率均值为该参数组合最终准确率。
-        Randomized_search = RandomizedSearchCV(estimator=model_init_batch_epoch_CV,
-                            param_distributions=parameter_space)
-        Randomized_search_result = Randomized_search.fit(self.train_X,self.train_y,verbose = 1)
-        y_pred = Randomized_search.predict(self.test_X)
-        y_pred = y_pred.squeeze(axis = 1)
-        test_results = np.sign(y_pred * self.test_y)
-        cor = 0
-        for x in test_results:
-            if x > 0:
-                cor += 1
-        acc = cor * 1.0 / len(test_results)
-        print(acc)
-        # Randomized_search.score()
-        # # print results
-        # def report(results, n_top=5):
-        #     for i in range(1, n_top + 1):
-        #         candidates = np.flatnonzero(results['rank_test_score'] == i)
-        #         for candidate in candidates:
-        #             print("Model with rank:{0}".format(i))
-        #             # print("Mean train score:{0:.3f}(std:{1:.3f})".format(
-        #             #     results['mean_train_score'][candidate],
-        #             #     results['std_train_score'][candidate]))
-        #             print("Mean validation score:{0:.3f}(std:{1:.3f})".format(
-        #                 results['mean_test_score'][candidate],
-        #                 results['std_test_score'][candidate]))
-        #             print("Parameters:{0}".format(results['params'][candidate]))
-        #             print("")
-        # report(Randomized_search_result.cv_results_)
-        # print(f'Best Accuracy for {Randomized_search_result.best_score_:.4} using {Randomized_search_result.best_params_}')
-        # means = Randomized_search_result.cv_results_['mean_test_score']
-        # stds = Randomized_search_result.cv_results_['std_test_score']
-        # params = Randomized_search_result.cv_results_['params']
-        # for mean, stdev, param in zip(means, stds, params):
-        #     print(f'mean={mean:.4}, std={stdev:.4} using {param}')
-
-sw_width = 60
+save_dir = '/home/liushaozhe/saved_models_layer1'
+sw_width = 60   # 三分钟数据
 batch_size = 512
-epochs_num = 100
+epochs_num = 30
 verbose_set = 1
-TRAIN_RATIO = 0.7
-save_dir = os.path.join(os.getcwd(), 'saved_models')
-model_name = 'keras_ETF_trained_model.h5'
-MultiInputLSTM = MultiInputModels(train_seq, test_seq, sw_width, batch_size, epochs_num, save_dir,verbose_set)
-MultiInputLSTM.split_sequence_multi_input()
-# MultiInputLSTM.lstm_model(test_batch= 512,test_epochs_num= 5,lr = 0.1,test_verbose_set=1)
-MultiInputLSTM.vanilla_lstm()
-MultiInputLSTM.load_model_test(save_dir, model_name)
-# MultiInputLSTM.Random_search_LSTM()
+TRAIN_TEST_RATIO = 0.8
+os.environ["CUDA_VISIBLE_DEVICES"] = "2, 3"
+# save_dir = os.path.join(os.getcwd(), 'saved_models')
+for i in data_list:
+    save_dir = '/home/liushaozhe/saved_models_layer1'
+    file = Path(save_dir + '/' + str(i.split('.')[0]))
+    if file.exists():
+        pass
+    else:
+        os.mkdir(file)
+    save_dir = os.path.join(save_dir,str(i.split('.')[0]))
+    data = pd.read_csv('/home/liushaozhe/dataSet/clean_data_save/' + i,index_col = 'Time')
+    data = data.drop('weighted_price', axis=1)
+    # 直接load所有features
+    # train_seq = data.iloc[:int(TRAIN_TEST_RATIO * data.shape[0]), :].values
+    # test_seq = data.iloc[int(TRAIN_TEST_RATIO * data.shape[0]):, :].values
+    # 进行feature selection后
+    data = load_data_with_featureselect(data,20)
+    train_seq = data.iloc[:int(TRAIN_TEST_RATIO * data.shape[0]), :].values
+    test_seq = data.iloc[int(TRAIN_TEST_RATIO * data.shape[0]):, :].values
+
+    model_name = 'keras_ETF_trained_model.h5'
+    MultiInputLSTM = MultiInputModels(train_seq, test_seq, sw_width, batch_size, epochs_num, verbose_set)
+    MultiInputLSTM.split_sequence_multi_input()
+    MultiInputLSTM.vanilla_lstm(save_dir)
+    MultiInputLSTM.load_model_test(save_dir, model_name)
+    print('Finish one file')
+print('end')
+
+
