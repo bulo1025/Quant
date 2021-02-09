@@ -91,13 +91,15 @@ for target in tqdm(target_list):
     # midprc 因子d
     def mid_price(a1, b1):
         return (a1 + b1) / 2
-    temp = weighted_middle_price(data['askPrice1'], data['bidPrice1'],data['askVolume1'],data['bidVolume1'])
-    data['weighted_midprice'] = temp
+    # temp = weighted_middle_price(data['askPrice1'], data['bidPrice1'],data['askVolume1'],data['bidVolume1'])
+    # data['weighted_midprice'] = temp
+    temp = mid_price(data['askPrice1'],data['bidPrice1'])
+    data['midprice'] = temp
 
     # -----------------------------因子构建----------------------------#
     print('feature generation start')
     final_DF = pd.DataFrame()
-    final_DF['weighted_midprice'] = data['weighted_midprice']
+    final_DF['midprice'] = data['midprice']
     #
     # # 因子1 买卖压力
     def pressure_Factor(close, askprice, bidprice, askvolume, bidvolume):
@@ -128,10 +130,16 @@ for target in tqdm(target_list):
     temp = volume_gap(askvolume,bidvolume)
     final_DF[['volume_gap0','volume_gap1','volume_gap2','volume_gap3','volume_gap4']] = temp
 
+
+
     # # # 4.挂单增量的买卖不平衡（买减卖)
+    tick_price = data['value'] / data['volume']
+    bid_ratio = (askprice['askPrice1'] - tick_price) / (askprice['askPrice1'] - bidprice['bidPrice1'])
+    bid_vol = data['volume'] * bid_ratio
+    ask_vol = data['volume'] - bid_vol
     def newcome_buy_vol(cols,bidvolume,bidprice):
         ret_df = pd.DataFrame()
-        for col in cols:
+        for col in range(cols.shape[1]):
             newcome_vol = []
             for i in range(1,bidvolume.shape[0]):
                 if bidprice['bidPrice'+col].iloc[i] < bidprice['bidPrice' + col].iloc[i-1]:
