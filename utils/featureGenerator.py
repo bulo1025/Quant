@@ -47,6 +47,7 @@ for target in tqdm(target_list):
         return data.drop(['exchangeCD','ticker'],axis = 1).astype('float'),data_futures,data_index
 
     data,data_futures,data_index = load_Origin_Data(dir)
+    data = data.iloc[:3000,:]
     print(data.shape)
 
     # 变量转换函数
@@ -95,7 +96,10 @@ for target in tqdm(target_list):
     # data['weighted_midprice'] = temp
     temp = mid_price(data['askPrice1'],data['bidPrice1'])
     data['midprice'] = temp
-
+    bar_data = data['Close'].resample('1T', closed='right', how='ohlc')
+    bar_data_re = bar_data.resample('1S').bfill()[['high','low']]
+    data['high_1minbar'] = bar_data_re['high']    # 生成1分钟close price 的high bar
+    data['low_1minbar'] = bar_data_re['low']      # 1分钟总close price 的 low bar
     # -----------------------------因子构建----------------------------#
     print('feature generation start')
     final_DF = pd.DataFrame()
@@ -139,37 +143,60 @@ for target in tqdm(target_list):
     ask_vol = data['volume'] - bid_vol
     def newcome_buy_vol(cols,bidvolume,bidprice):
         ret_df = pd.DataFrame()
-        for col in range(cols.shape[1]):
+        for col_idx in range(len(cols[:-1])):
             newcome_vol = []
             for i in range(1,bidvolume.shape[0]):
-                if bidprice['bidPrice'+col].iloc[i] < bidprice['bidPrice' + col].iloc[i-1]:
-                    newcome_vol.append(0)
-                elif bidprice['bidPrice' + col].iloc[i] == bidprice['bidPrice' + col].iloc[i-1]:
-                    newcome_vol.append(bidvolume['bidVolume' + col].iloc[i] - bidvolume['bidVolume' + col].iloc[i-1])
+                if bidprice['bidPrice' + cols[col_idx]].iloc[i] < bidprice['bidPrice' + cols[col_idx]].iloc[i-1]:
+                    if bidprice['bidPrice' + cols[col_idx]].iloc[i] <= bidprice['bidPrice' + cols[col_idx + 1]].iloc[i-1]:
+                        newcome_vol.append(0)
+                    else:
+                        newcome_vol.append(bidprice['bidVolume' + cols[col_idx]].iloc[i] - bidprice['bidVolume' + cols[col_idx+1]].iloc[i-1])
+                elif bidprice['bidPrice' + cols[col_idx]].iloc[i] == bidprice['bidPrice' + cols[col_idx]].iloc[i-1]:
+                    newcome_vol.append(bidvolume['bidVolume' + cols[col_idx]].iloc[i] - bidvolume['bidVolume' + cols[col_idx]].iloc[i-1] + bid_vol.iloc[i])
                 else:
-                    newcome_vol.append(bidvolume['bidVolume' + col].iloc[i])
-            ret_df['buy_col' + col] = pd.Series(newcome_vol)
+                    newcome_vol.append(bidvolume['bidVolume' + cols[col_idx]].iloc[i] + ask_vol.iloc[i])
+            ret_df['buy_col' + cols[col_idx]] = pd.Series(newcome_vol)
         return ret_df.set_index(bidvolume.index[1:])
-    #
+
     def newcome_sell_vol(cols,askvolume,askprice):
         ret_df = pd.DataFrame()
-        for col in cols:
+        for col_idx in range(len(cols[:-1])):
             newcome_vol = []
             for i in range(1, askvolume.shape[0]):
-                if askprice['askPrice' + col].iloc[i] < askprice['askPrice' + col].iloc[i - 1]:
-                    newcome_vol.append(0)
-                elif askprice['askPrice' + col].iloc[i] == askprice['askPrice' + col].iloc[i - 1]:
-                    newcome_vol.append(askvolume['askVolume' + col].iloc[i] - askvolume['askVolume' + col].iloc[i - 1])
+                if askprice['askPrice' + cols[col_idx]].iloc[i] < askprice['askPrice' + cols[col_idx]].iloc[i - 1]:
+                    newcome_vol.append(askvolume['askVolume' + cols[col_idx]].iloc[i] + bid_vol.iloc[i])
+                elif askprice['askPrice' + cols[col_idx]].iloc[i] == askprice['askPrice' + cols[col_idx]].iloc[i - 1]:
+                    newcome_vol.append(askvolume['askVolume' + cols[col_idx]].iloc[i] - askvolume['askVolume' + cols[col_idx]].iloc[i - 1] + ask_vol.iloc[i])
                 else:
-                    newcome_vol.append(askvolume['askVolume' + col].iloc[i])
-            ret_df['buy_col' + col] = pd.Series(newcome_vol)
+                    if askvolume['askVolume' + cols[col_idx]].iloc[i] <= askvolume['askVolume' + cols[col_idx+1]].iloc[i-1]:
+                        newcome_vol.append(0)
+                    else:
+                        newcome_vol.append(askvolume['askVolume' + cols[col_idx]].iloc[i] - askvolume['askVolume' + cols[col_idx+1]].iloc[i-1])
+            ret_df['buy_col' + cols[col_idx]] = pd.Series(newcome_vol)
         return ret_df.set_index(askvolume.index[1:])
     #
     def VOI(col_buy,col_sell,askvolume,askprice,bidvolume,bidprice):
-        return newcome_buy_vol(['1','2','3','4','5'],bidvolume,bidprice) - newcome_sell_vol(['1','2','3','4','5'],askvolume,askprice)
+        return newcome_buy_vol(col_buy,bidvolume,bidprice) - newcome_sell_vol(col_sell,askvolume,askprice)
     temp = VOI(['1','2','3','4','5'],['1','2','3','4','5'],askvolume,askprice,bidvolume,bidprice)
     final_DF = pd.concat([final_DF,temp],axis = 1,join= 'inner')
 
+    # 6. 均值回归因子MPB
+    def average_trade_price():
+        TP = []
+        for i in range(data.shape[0]):
+            if i == 0:
+                TP.append(data['midprice'].iloc[i])
+            elif data['volume'].iloc[i] > 0:
+                TP.append(tick_price.iloc[i])
+            elif data['volume'].iloc[i] == 0:
+                TP.append(TP[i-1])
+        TP = pd.Series(TP,index = data.index)
+        return TP
+    def MPB(tp_series,midprice):
+        return tp_series - midprice
+    tp_series = average_trade_price()
+    temp = MPB(tp_series,data['midprice'])
+    final_DF['MPB'] = temp
     # # 7.趋势因子
     def trend_strength(time_window,midprice_series):
         trend_strength = []
@@ -180,7 +207,7 @@ for target in tqdm(target_list):
             trend_strength.append(delta.sum()/abs(delta+0.01).sum())
         return pd.Series(trend_strength,index = midprice_series.index[time_window:])
     temp = mid_price(askprice['askPrice1'],bidprice['bidPrice1'])
-    temp = trend_strength(10,temp)
+    temp = trend_strength(60,temp)
     retdf = pd.DataFrame()
     retdf['trend_strength'] = temp
     final_DF = pd.concat([final_DF,retdf],axis = 1,join='inner')
@@ -202,18 +229,30 @@ for target in tqdm(target_list):
             spread_list.append(c)
             sigma_u_list.append(sigmau)
         return pd.Series(spread_list,index = data.index[timewindow:]),pd.Series(sigma_u_list,index = data.index[timewindow:])
-    temp,temp2 = half_bid_ask_spread(data,21)
-    final_DF['roll_model_c'] = temp
-    final_DF['roll_model_sigma'] = temp2
+    # temp,temp2 = half_bid_ask_spread(data,21)
+    # final_DF['roll_model_c'] = temp
+    # final_DF['roll_model_sigma'] = temp2
+    # 3.high-low volatility
+    def high_low_volatility(data,window):
+        hl_ratio = np.log(data['high_1minbar'] / data['low_1minbar'])
+        hl_volatility = hl_ratio.rolling(window).sum() / window
+        hl_volatility_2 = (hl_ratio ** 2).rolling(window).sum() / window / (4 * np.log(2))
+        return hl_volatility.dropna(),hl_volatility_2.dropna()
+    window_list = [100,200,300]
+    for i in window_list:
+        temp1,temp2 = high_low_volatility(data,i)
+        final_DF['hl_volatility_' + str(i)] = temp1
+        final_DF['hl_volatility2_' + str(i)] = temp2
+    final_DF = final_DF.dropna()   # 其实也可以不用写
     # 4.corwin and schultz
     def getGamma(data):
-        h2 = data['High'].rolling(2).max()
-        l2 = data['Low'].rolling(2).min()
+        h2 = data['high_1minbar'].rolling(2).max()
+        l2 = data['low_1minbar'].rolling(2).min()
         gamma = np.log(h2.values / l2.values) ** 2
         gamma = pd.Series(gamma, index=h2.index)
         return gamma.dropna()
     def getBeta(data, sl):
-        hl = data[['High', 'Low']].values
+        hl = data[['high_1minbar', 'low_1minbar']].values
         hl = np.log(hl[:, 0] / hl[:, 1]) ** 2
         hl = pd.Series(hl, index=data.index)
         beta = hl.rolling(2).sum()  # 这里窗口2为公式给定
