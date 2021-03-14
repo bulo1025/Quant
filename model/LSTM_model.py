@@ -18,7 +18,7 @@ class MultiInputModels:
     '''
     时间序列LSTM模型
     '''
-    def __init__(self, train_seq, test_seq, sw_width, batch_size, epochs_num, verbose_set):
+    def __init__(self, train_seq, test_seq, sw_width, batch_size, epochs_num, verbose_set,train_seq_idx,test_seq_idx):
         '''
         初始化变量和参数
         '''
@@ -30,7 +30,10 @@ class MultiInputModels:
         self.verbose_set = verbose_set
         self.train_X, self.train_y = [], []
         self.test_X, self.test_y = [], []
-
+        self.train_seq_idx = train_seq_idx
+        self.test_seq_idx = test_seq_idx
+        self.train_index = []
+        self.test_index = []
     def split_sequence_multi_input(self):
         '''
         该函数实现多输入序列数据的样本划分
@@ -49,12 +52,14 @@ class MultiInputModels:
             # [end_index-1, -1] 截取第end_index-1行、最后一列的单个数据，其实是在截取期望预测值y；
             # seq_x, seq_y = self.train_seq[i:end_index, 1:], self.train_seq[end_index - 1, 0]
             # 这里由于列名的缘故
-            seq_x, seq_y = self.train_seq[i:end_index, 1:-1], self.train_seq[end_index - 1, -1]
+            seq_x, seq_y = self.train_seq[i:end_index, :-1], self.train_seq[end_index - 1, -1]
+            seq_x_idx = self.train_seq_idx[end_index - 1]    # 取当前需要预测的y的index
             scaler = MinMaxScaler().fit(seq_x)
             seq_x = scaler.transform(seq_x)
             self.train_X.append(seq_x)
             self.train_y.append(seq_y)
-        self.train_X, self.train_y = np.array(self.train_X), np.array(self.train_y)
+            self.train_index.append(seq_x_idx)
+        self.train_X, self.train_y,self.train_index = np.array(self.train_X), np.array(self.train_y), np.array(self.train_index)
         self.features = self.train_X.shape[2]
         # ------- 测试输入数据的样本划分------------#
         for i in range(len(self.test_seq)):
@@ -67,24 +72,39 @@ class MultiInputModels:
             # 实现以滑动步长为1（因为是for循环），窗口宽度为self.sw_width的滑动步长取值；
             # [i:end_index, :-1] 截取第i行到第end_index-1行、除最后一列之外的列的数据；
             # [end_index-1, -1] 截取第end_index-1行、最后一列的单个数据，其实是在截取期望预测值y；
-            seq_x, seq_y = self.test_seq[i:end_index, 1:-1], self.test_seq[end_index - 1, -1]
+            seq_x, seq_y = self.test_seq[i:end_index, :-1], self.test_seq[end_index - 1, -1]
+            seq_x_idx = self.test_seq_idx[end_index - 1]
             scaler = MinMaxScaler().fit(seq_x)
             seq_x = scaler.transform(seq_x)
             self.test_X.append(seq_x)
             self.test_y.append(seq_y)
-        self.test_X, self.test_y = np.array(self.test_X), np.array(self.test_y)
+            self.test_index.append(seq_x_idx)
+        self.test_X, self.test_y, self.train_index = np.array(self.test_X), np.array(self.test_y), np.array(self.train_index)
         print('train_X.shape:{}, train_y.shape:{}\n'.format(self.train_X.shape, self.train_y.shape))
         print('test_X.shape:{}, test_y.shape:{}\n'.format(self.test_X.shape, self.test_y.shape))
         return self.train_X, self.train_y, self.test_X, self.test_y, self.features
 
     def vanilla_lstm(self, save_dir,model_name):
         model = Sequential()
-        model.add(LSTM(25, activation='relu',
-                       input_shape=(self.sw_width, self.features)))
-        # model.add(LSTM(20, activation='relu',
+        model.add(LSTM(32, activation='relu',
+                       input_shape=(self.sw_width, self.features),return_sequences=True))
+        model.add(Dropout(0.3))
+        model.add(LSTM(32, activation='relu', return_sequences=True))
+        model.add(Dropout(0.3))
+        model.add(LSTM(16, activation='relu', return_sequences=True))
+        model.add(Dropout(0.3))
+        model.add(LSTM(8, activation='relu', return_sequences=False))
+        # represent 参数
+        # model.add(LSTM(32, activation='relu',
         #                input_shape=(self.sw_width, self.features), return_sequences=True))
-        # model.add(LSTM(5, activation='tanh', return_sequences=False))
-        # model.add(LSTM(64, activation='relu',return_sequences=False))
+        # model.add(Dropout(0.3))
+        # model.add(LSTM(64, activation='relu', return_sequences=True))
+        # model.add(Dropout(0.3))
+        # model.add(LSTM(128, activation='relu', return_sequences=True))
+        # model.add(Dropout(0.3))
+        # model.add(LSTM(64, activation='relu', return_sequences=True))
+        # model.add(Dropout(0.3))
+        # model.add(LSTM(12, activation='relu', return_sequences=False))
         model.add(Dense(1))
         # def trend_accuracy(y_true,y_pred):
         #     train_results = K.sign(y_true*y_pred)
@@ -111,7 +131,7 @@ class MultiInputModels:
             if x > 0:
                 cor += 1
         acc = cor * 1.0 / len(test_results)
-        print("The test acc is %f" % acc)
+        print("The total test acc is %f" % acc)
         # ------------------save_model-----------------#
         if not os.path.isdir(save_dir):
             os.makedirs(save_dir)
@@ -130,6 +150,22 @@ class MultiInputModels:
         plt.savefig(save_dir +'/' + 'loss.jpg')
         plt.show()
 
+    def train_test_predict_tocsv(self,save_dir,model_name):
+        print('Start test predict writing')
+        model = keras.models.load_model(save_dir + '/' + model_name)
+        y_pred_test = model.predict(self.test_X).squeeze(axis=1)  # 降低维度
+        test_pred = pd.DataFrame()
+        test_pred['y_pred'] = y_pred_test
+        test_pred['Time'] = self.test_index
+        test_pred = test_pred.set_index('Time')
+        test_pred.to_csv(save_dir + '/' + 'test_pred.csv')
+        print('Start train predict writing')
+        y_pred_train = model.predict(self.train_X).squeeze(axis=1)  # 降低维度
+        train_pred = pd.DataFrame()
+        train_pred['y_pred'] = y_pred_train
+        train_pred['Time'] = self.train_index
+        train_pred = train_pred.set_index('Time')
+        train_pred.to_csv(save_dir + '/' + 'train_pred.csv')
     def load_model_test(self, save_dir, model_name, train_flag=0):
         model = keras.models.load_model(save_dir + '/' + model_name)
         if train_flag:
@@ -141,6 +177,17 @@ class MultiInputModels:
             target_DF['y_pred'] = y_pred
             target_DF['y_true'] = y_true
             # target_DF = target_DF[(target_DF['y_pred'] > 0.0015) & (target_DF['y_pred'] < 0.015)]
+            # scatter line fig
+            # plt.figure(figsize=(10, 10), dpi=200)
+            # plt.plot(y_pred.iloc[:500],label = 'y_pred',color='red',linewidth=1.0, linestyle='--')
+            # plt.plot(y_true.iloc[:500],label = 'y_true',color='blue', linewidth=1.0, linestyle='-.')
+            # plt.title('y_pred and y_true', fontsize=12)
+            # plt.legend()
+            # plt.xlabel("time(minute)")  # X轴标签
+            # plt.ylabel("midprice")  # Y轴标签
+            # plt.savefig(save_dir + '/' + 'y_pred and y_true value.jpg')
+            # plt.show()
+            # scatter trend fig
             plt.figure(figsize=(8, 8), dpi=200)
             plt.scatter(target_DF['y_pred'], target_DF['y_true'], s=30)
             plt.title('y_pred VS y_true', fontsize=12)
@@ -149,14 +196,26 @@ class MultiInputModels:
             # plt.axis([-0.001, 0.002, -0.001, 0.002])
             plt.savefig(save_dir + '/' +'y_predVSy_true.jpg')
             plt.show()
+            test_results_all = np.sign(y_pred * y_true)
+            cor = 0
+            for x in test_results_all:
+                if x > 0:
+                    cor += 1
+            acc_all = cor * 1.0 / len(test_results_all)
+            # 0510050 midprice 均值为 3.49571
+            boundary = 3.49671 * 0.0015
+            y_true[(y_true < boundary) & (y_true > -boundary)] = 0
+            value_count = np.count_nonzero(y_true)
             test_results = np.sign(y_pred * y_true)
             cor = 0
             for x in test_results:
                 if x > 0:
                     cor += 1
-            acc = cor * 1.0 / len(test_results)
+            # acc = cor * 1.0 / len(test_results)
+            acc = cor * 1.0 / value_count
             with open(save_dir + '/' + "result.txt", "w") as f:
-                f.write("The test acc is %f" % acc)
-            print("The test acc is %f" % acc)
+                f.write("The test acc all is %f" % acc_all)
+                f.write("The test acc above bound is %f" % acc)
+            print("The test acc above bound is %f" % acc)
 
 

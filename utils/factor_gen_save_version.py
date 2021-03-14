@@ -6,7 +6,8 @@ from scipy.special import expit
 from tqdm import tqdm
 # origin_data = '510050.XSHG'
 dir = '../dataSet/'
-# target_list = ['0512880','0510050','0510500','1159949','1159995']
+# target_list = ['0512880','0510050','0510500','1150040','1159995']
+# target_list = ['0510500','0510050','0512880','1159995']
 target_list = ['0512880']
 ref_dict = {'0510050':['FIH2103_Hist','0000016_Hist'],
             '0512880':['FIH2103_Hist','1399975_Hist'],
@@ -48,9 +49,12 @@ for target in tqdm(target_list):
         return data.drop(['exchangeCD','ticker'],axis = 1).astype('float'),data_futures,data_index
 
     data,data_futures,data_index = load_Origin_Data(dir)
-    data = data.iloc[:10000,:]
+    data['Value'] = data['value'].diff()
+    data['Value'] = data['Value'].fillna(method='ffill')
+    data['pt'] = data['Value'] / data['Volume']
+    data['pt'] = data['pt'].fillna(method='ffill')
+    data = data.dropna()
     print(data.shape)
-
     # 变量转换函数
     def variable_shift(data):
         open = data.Open
@@ -91,32 +95,49 @@ for target in tqdm(target_list):
     def weighted_middle_price(a1, b1, v_a1, v_b1):
         return (b1 * v_b1 + a1 * v_a1) / (v_b1 + v_a1)
     # midprc 因子d
-    def mid_price(a1, b1):   # mid—price 作为target
+    def mid_price(a1, b1):
         return (a1 + b1) / 2
-    temp = weighted_middle_price(data['askPrice1'], data['bidPrice1'],data['askVolume1'],data['bidVolume1'])
-    data['weighted_midprice'] = temp
-
+    # temp = weighted_middle_price(data['askPrice1'], data['bidPrice1'],data['askVolume1'],data['bidVolume1'])  # 加权价格
+    temp = mid_price(data['askPrice1'],data['bidPrice1'])   # 直接的midprice
+    data['midprice'] = temp
+    bar_data = data['Close'].resample('1T', closed='right', how='ohlc')
+    #  rolling
+    bar_data_re = bar_data.resample('1S').bfill()[['high','low']]
+    data['high_1minbar'] = bar_data_re['high']    # 生成1分钟close price 的high bar
+    data['low_1minbar'] = bar_data_re['low']      # 1分钟总close price 的 low bar
+    data = data.dropna()
     # -----------------------------因子构建----------------------------#
     print('feature generation start')
     final_DF = pd.DataFrame()
-    final_DF['weighted_midprice'] = data['weighted_midprice']
-    #
+    final_DF['midprice'] = data['midprice']
     # # 因子1 买卖压力
-    def pressure_Factor(close, askprice, bidprice, askvolume, bidvolume):
-        def weight(close, price):
-            numerator = price.apply(lambda x: close / (x - close))
-            denominator = numerator.sum(1)
-            return numerator.apply(lambda x: x / denominator)
-
-        weight_ask = weight(close, askprice)
-        weight_ask[~np.isfinite(weight_ask)] = 0.2
-        weight_bid = weight(close, bidprice)
-        weight_bid[~np.isfinite(weight_bid)] = 0.2
-        pressure_ask = (askvolume.values * weight_ask.values).sum(1)
-        pressure_bid = (bidvolume.values * weight_bid.values).sum(1)
-        return pd.Series(expit(pressure_bid / pressure_ask), index=close.index)
-
-    temp = pressure_Factor(close,askprice,bidprice,askvolume,bidvolume)
+    # def pressure_Factor1(close, askprice, bidprice, askvolume, bidvolume):
+    #     def weight(close, price):
+    #         numerator = price.apply(lambda x: close / (x - close))
+    #         denominator = numerator.sum(1)
+    #         return numerator.apply(lambda x: x / denominator)
+    #
+    #     weight_ask = weight(close, askprice)
+    #     weight_ask[~np.isfinite(weight_ask)] = 0.2
+    #     weight_bid = weight(close, bidprice)
+    #     weight_bid[~np.isfinite(weight_bid)] = 0.2
+    #     pressure_ask = (askvolume.values * weight_ask.values).sum(1)
+    #     pressure_bid = (bidvolume.values * weight_bid.values).sum(1)
+    #     return pd.Series(np.log(pressure_bid / pressure_ask), index=close.index)
+    def pressure_Factor(midprice,askprice, bidprice, askvolume, bidvolume):
+        numerator_buy = bidvolume.values / (bidprice.sub(midprice,axis = 0).values + 0.000001)
+        # 防止无穷大值出现
+        numerator_buy[~np.isfinite(numerator_buy)] = 0.2
+        denominator_buy = (1 / (bidprice.sub(midprice,axis = 0).values).sum(axis = 1).reshape(-1,1) + 0.000001)
+        denominator_buy[~np.isfinite(denominator_buy)] = 0.2
+        pressure_buy = (numerator_buy / denominator_buy).sum(axis = 1)
+        numerator_sell = askvolume.values / (askprice.sub(midprice, axis=0).values + 0.000001)
+        numerator_sell[~np.isfinite(numerator_buy)] = 0.2
+        denominator_sell = (1 / (askprice.sub(midprice, axis=0).values).sum(axis=1).reshape(-1, 1) + 0.000001)
+        pressure_sell = (numerator_sell / denominator_sell).sum(axis=1)
+        numerator_sell[~np.isfinite(numerator_buy)] = 0.2
+        return pd.Series(np.log(pressure_buy / (pressure_sell + 0.000001)), index=close.index)
+    temp = pressure_Factor(data['midprice'],askprice,bidprice,askvolume,bidvolume)
     final_DF['pressure'] = temp
     #
     # # # 3.挂单量的买卖不均衡
@@ -125,89 +146,146 @@ for target in tqdm(target_list):
         统一返回一个0，1，2，3，4 时间节点的dataframe
         """
         time_index = askvolume.index
-        temp = (askvolume.values - bidvolume.values)/ (askvolume.values + bidvolume.values)
+        temp = (bidvolume.values - askvolume.values)/ (bidvolume.values + askvolume.values)
         return pd.DataFrame(temp,index = time_index)
     temp = volume_gap(askvolume,bidvolume)
     final_DF[['volume_gap0','volume_gap1','volume_gap2','volume_gap3','volume_gap4']] = temp
-
+    # def price_gap(askprice,bidprice):
+    #     #
+    #     time_index = askprice.index
+    #     HR2 = (bidprice['bidPrice1'] - bidprice['bidPrice2'] - (askprice['askPrice2'] - askprice['askPrice1'])) / (
+    #             bidprice['bidPrice1'] - bidprice['bidPrice2'] + (askprice['askPrice2'] - askprice['askPrice1']))
+    #     HR3 = (bidprice['bidPrice2'] - bidprice['bidPrice3'] - (askprice['askPrice3'] - askprice['askPrice2'])) / (
+    #             bidprice['bidPrice2'] - bidprice['bidPrice3'] + (askprice['askPrice2'] - askprice['askPrice1']))
+    #     HR2 = pd.Series(HR2,index= time_index)
+    #     HR3 = pd.Series(HR3, index=time_index)
+    #     return HR2,HR3   # youwenti
+    # HR2,HR3 = price_gap(askprice, bidprice)
+    # final_DF['price_gap2'] = HR2
+    # final_DF['price_gap3'] = HR3
     # # # 4.挂单增量的买卖不平衡（买减卖)
+    tick_price = data['pt']
+    bid_ratio = (askprice['askPrice1'] - tick_price) / (askprice['askPrice1'] - bidprice['bidPrice1'])
+    bid_vol = data['Volume'] * bid_ratio
+    ask_vol = data['Volume'] - bid_vol
     def newcome_buy_vol(cols,bidvolume,bidprice):
         ret_df = pd.DataFrame()
-        for col in cols:   # LAMBDA
+        for col_idx in range(len(cols[:-1])):
             newcome_vol = []
             for i in range(1,bidvolume.shape[0]):
-                if bidprice['bidPrice'+col].iloc[i] < bidprice['bidPrice' + col].iloc[i-1]:
-                    newcome_vol.append(0)
-                elif bidprice['bidPrice' + col].iloc[i] == bidprice['bidPrice' + col].iloc[i-1]:
-                    newcome_vol.append(bidvolume['bidVolume' + col].iloc[i] - bidvolume['bidVolume' + col].iloc[i-1])
+                if bidprice['bidPrice' + cols[col_idx]].iloc[i] < bidprice['bidPrice' + cols[col_idx]].iloc[i-1]:
+                    if bidvolume['bidVolume' + cols[col_idx]].iloc[i] <= bidvolume['bidVolume' + cols[col_idx + 1]].iloc[i-1]:
+                        newcome_vol.append(0)
+                    else:
+                        newcome_vol.append(bidvolume['bidVolume' + cols[col_idx]].iloc[i] - bidvolume['bidVolume' + cols[col_idx+1]].iloc[i-1])
+                elif bidprice['bidPrice' + cols[col_idx]].iloc[i] == bidprice['bidPrice' + cols[col_idx]].iloc[i-1]:
+                    newcome_vol.append(bidvolume['bidVolume' + cols[col_idx]].iloc[i] - bidvolume['bidVolume' + cols[col_idx]].iloc[i-1] + bid_vol.iloc[i])
                 else:
-                    newcome_vol.append(bidvolume['bidVolume' + col].iloc[i])
-            ret_df['buy_col' + col] = pd.Series(newcome_vol)
+                    newcome_vol.append(bidvolume['bidVolume' + cols[col_idx]].iloc[i] + ask_vol.iloc[i])
+            ret_df['buy_col' + cols[col_idx]] = pd.Series(newcome_vol)
         return ret_df.set_index(bidvolume.index[1:])
-    #
+
     def newcome_sell_vol(cols,askvolume,askprice):
         ret_df = pd.DataFrame()
-        for col in cols:
+        for col_idx in range(len(cols[:-1])):
             newcome_vol = []
             for i in range(1, askvolume.shape[0]):
-                if askprice['askPrice' + col].iloc[i] < askprice['askPrice' + col].iloc[i - 1]:
-                    newcome_vol.append(0)
-                elif askprice['askPrice' + col].iloc[i] == askprice['askPrice' + col].iloc[i - 1]:
-                    newcome_vol.append(askvolume['askVolume' + col].iloc[i] - askvolume['askVolume' + col].iloc[i - 1])
+                if askprice['askPrice' + cols[col_idx]].iloc[i] < askprice['askPrice' + cols[col_idx]].iloc[i - 1]:
+                    newcome_vol.append(askvolume['askVolume' + cols[col_idx]].iloc[i] + bid_vol.iloc[i])
+                elif askprice['askPrice' + cols[col_idx]].iloc[i] == askprice['askPrice' + cols[col_idx]].iloc[i - 1]:
+                    newcome_vol.append(askvolume['askVolume' + cols[col_idx]].iloc[i] - askvolume['askVolume' + cols[col_idx]].iloc[i - 1] + ask_vol.iloc[i])
                 else:
-                    newcome_vol.append(askvolume['askVolume' + col].iloc[i])
-            ret_df['buy_col' + col] = pd.Series(newcome_vol)
+                    if askvolume['askVolume' + cols[col_idx]].iloc[i] <= askvolume['askVolume' + cols[col_idx+1]].iloc[i-1]:
+                        newcome_vol.append(0)
+                    else:
+                        newcome_vol.append(askvolume['askVolume' + cols[col_idx]].iloc[i] - askvolume['askVolume' + cols[col_idx+1]].iloc[i-1])
+            ret_df['buy_col' + cols[col_idx]] = pd.Series(newcome_vol)
         return ret_df.set_index(askvolume.index[1:])
     #
-    def VOI(col_buy,col_sell,askvolume,askprice,bidvolume,bidprice):   # 改成改进版本
-        return newcome_buy_vol(['1','2','3','4','5'],bidvolume,bidprice) - newcome_sell_vol(['1','2','3','4','5'],askvolume,askprice)
+    def VOI(col_buy,col_sell,askvolume,askprice,bidvolume,bidprice):
+        a = newcome_buy_vol(col_buy, bidvolume, bidprice)
+        b = newcome_sell_vol(col_sell,askvolume,askprice)
+        return newcome_buy_vol(col_buy,bidvolume,bidprice) - newcome_sell_vol(col_sell,askvolume,askprice)
     temp = VOI(['1','2','3','4','5'],['1','2','3','4','5'],askvolume,askprice,bidvolume,bidprice)
     final_DF = pd.concat([final_DF,temp],axis = 1,join= 'inner')
 
-    # # 7.趋势因子
+    # 6. 均值回归因子MPB
+    def average_trade_price():
+        TP = []
+        for i in range(data.shape[0]):
+            if i == 0:
+                TP.append(data['midprice'].iloc[i])
+            elif data['Volume'].iloc[i] > 0:
+                TP.append(tick_price.iloc[i])
+            elif data['Volume'].iloc[i] == 0:
+                TP.append(TP[i-1])
+        TP = pd.Series(TP,index = data.index)
+        return TP
+    def MPB(tp_series,midprice):
+        return tp_series - midprice
+    tp_series = average_trade_price()
+    temp = MPB(tp_series,data['midprice'])
+    final_DF['MPB'] = temp
+    # 7.趋势因子
     def trend_strength(time_window,midprice_series):
         trend_strength = []
         for i in range(time_window,midprice_series.shape[0]):
             window_series = midprice_series.iloc[i-time_window:i]
     #         print(window_series.shape[0])
             delta = window_series.diff()
-            trend_strength.append(delta.sum()/abs(delta+0.01).sum())
+            trend_strength.append(delta.sum()/(abs(delta).sum() + 0.0000001))
         return pd.Series(trend_strength,index = midprice_series.index[time_window:])
     temp = mid_price(askprice['askPrice1'],bidprice['bidPrice1'])
-    temp = trend_strength(10,temp)   # 这里改成60  180   20
+    temp = trend_strength(60,temp)
     retdf = pd.DataFrame()
     retdf['trend_strength'] = temp
     final_DF = pd.concat([final_DF,retdf],axis = 1,join='inner')
     print('finish half')
     # 2.roll model
     def half_bid_ask_spread(data, timewindow):
-        def pt(data):
-            return data['value'] / data['volume']
+        def pt(data):   #    value  value 要做差分
+            return data['pt']
         spread_list = []
         sigma_u_list = []
-        for i in tqdm(range(timewindow, data.shape[0])):  # 滑动窗口遍历   i从当前时刻一直到最后一个时刻
+        # for i in tqdm(range(800, data.shape[0]-1)):  # 滑动窗口遍历   i从当前时刻一直到最后一个时刻
+        for i in range(timewindow,data.shape[0] - 1):
+            print(i)
             timewindowdata_t = data.iloc[i - timewindow:i, :]
             # timewindowdata_t1 = data.iloc[i - timewindow - 1:i - 1, :]
-            timewindowdata_t1 = timewindowdata_t.shift(1)
+            timewindowdata_t1 = timewindowdata_t.shift(1).dropna()   # 这里用shift后就需要iloc选取
             price_cov = np.cov(pt(timewindowdata_t).diff().dropna().iloc[1:], pt(timewindowdata_t1).diff().dropna())[0][1]
             price_cov = (-price_cov if -price_cov > 0 else 0)
             c = price_cov ** 0.5
-            sigmau = np.var(pt(timewindowdata_t)) + 2 * np.cov(pt(timewindowdata_t).diff().dropna().iloc[1:], pt(timewindowdata_t1).diff().dropna())[0][1]
+            # sigmau = np.var(pt(timewindowdata_t)) + 2 * np.cov(pt(timewindowdata_t).diff().dropna().iloc[1:], pt(timewindowdata_t1).diff().dropna())[0][1]
             spread_list.append(c)
-            sigma_u_list.append(sigmau)
-        return pd.Series(spread_list,index = data.index[timewindow:]),pd.Series(sigma_u_list,index = data.index[timewindow:])
-    temp,temp2 = half_bid_ask_spread(data,21)
+            # sigma_u_list.append(sigmau)
+        return pd.Series(spread_list, index=data.index[timewindow:-1])
+        # return pd.Series(spread_list,index = data.index[timewindow:]),pd.Series(sigma_u_list,index = data.index[timewindow:])
+    # temp,temp2 = half_bid_ask_spread(data,21)
+    temp = half_bid_ask_spread(data, 21)
     final_DF['roll_model_c'] = temp
-    final_DF['roll_model_sigma'] = temp2   # 关注一下这两个的相关系数吧
-    # 4.corwin and schultz  # bar线的high low
+    # final_DF['roll_model_sigma'] = temp2
+    # 3.high-low volatility
+    def high_low_volatility(data,window):
+        hl_ratio = np.log(data['high_1minbar'] / data['low_1minbar'])
+        hl_volatility = hl_ratio.rolling(window).sum() / window
+        hl_volatility_2 = (hl_ratio ** 2).rolling(window).sum() / window / (4 * np.log(2))
+        return hl_volatility.dropna(),hl_volatility_2.dropna()
+    window_list = [100,200,300]
+    for i in window_list:
+        temp1,temp2 = high_low_volatility(data,i)
+        final_DF['hl_volatility_' + str(i)] = temp1
+        final_DF['hl_volatility2_' + str(i)] = temp2
+    final_DF = final_DF.dropna()   # 其实也可以不用写
+    # 4.corwin and schultz
     def getGamma(data):
-        h2 = data['High'].rolling(2).max()
-        l2 = data['Low'].rolling(2).min()
+        h2 = data['high_1minbar'].rolling(2).max()
+        l2 = data['low_1minbar'].rolling(2).min()
         gamma = np.log(h2.values / l2.values) ** 2
         gamma = pd.Series(gamma, index=h2.index)
         return gamma.dropna()
     def getBeta(data, sl):
-        hl = data[['High', 'Low']].values     # bar线的highlow
+        hl = data[['high_1minbar', 'low_1minbar']].values
         hl = np.log(hl[:, 0] / hl[:, 1]) ** 2
         hl = pd.Series(hl, index=data.index)
         beta = hl.rolling(2).sum()  # 这里窗口2为公式给定
@@ -227,9 +305,6 @@ for target in tqdm(target_list):
         gamma = getGamma(data)
         alpha = getAlpha(beta, gamma)
         spread = 2 * (np.exp(alpha) - 1) / (1 + np.exp(alpha))
-        # startTime = pd.Series(data.index[0:spread.shape[0]], index=spread.index)
-        # spread = pd.concat([spread, startTime], axis=1)
-        # spread.columns = ['Spread', 'Start_Time']
         return spread
     temp = corwinSchultz(data, 21)
     final_DF['corwinSchultz'] = temp
@@ -252,28 +327,28 @@ for target in tqdm(target_list):
     #
     # # ---------------长线因子------------------------#
     # 长线2-4 因子
-    # 这个因子会出现 -inf，故注释掉
-    def factor2(data,window):
-        return pd.Series(((data['High'] + data['Low'] + data['Close'])/3 -
-                 ((data['High'] + data['Low'] + data['Close'])/3).rolling(window).mean()/
-                 (abs(close -(data['High'] + data['Low'] + data['Close'])/3)).rolling(window).mean()/0.015).dropna())
-    #  如果出现-inf 就结果给0
-    # window_list = [4,6,12]   # 注释掉是有原因的，到时候需要改改啊。。。会出现inf
+    # 还会出现-inf
+    # def factor2(data,window):
+    #     return pd.Series(((data['high_1minbar'] + data['low_1minbar'] + data['Close'])/3 -
+    #              ((data['high_1minbar'] + data['low_1minbar'] + data['Close'])/3).rolling(window).mean()/
+    #              (abs(close -(data['high_1minbar'] + data['low_1minbar'] + data['Close'])/3)).rolling(window).mean()/0.015).dropna())
+    #
+    # window_list = [4,6,12]
     # for i in window_list:
     #     temp = factor2(data,i)
     #     final_DF['factor2_' + str(i)] = temp
 
     def factor4(data,window_paras):
-        return ((data['Close'] - data['Low'].rolling(window_paras[0]).min()) /
-        data['High'].rolling(window_paras[0]).max() - data['Low'].rolling(window_paras[0]).min()*100).rolling(window_paras[1]).mean().dropna()
+        return ((data['Close'] - data['low_1minbar'].rolling(window_paras[0]).min()) /
+        data['high_1minbar'].rolling(window_paras[0]).max() - data['low_1minbar'].rolling(window_paras[0]).min()*100).rolling(window_paras[1]).mean().dropna()
     window_list = [[4,1],[6,3]]
     for i in window_list:
         temp = factor4(data,i)
         final_DF['factor4_' + str(i)] = temp
 
     def factor5(data,window_paras):
-        part1 = data['Close'] - data['Low'].rolling(window_paras[0]).min()
-        part2 = (data['High'].rolling(window_paras[0]).max() - data['Low'].rolling(window_paras[0]).min()) * 100
+        part1 = data['Close'] - data['low_1minbar'].rolling(window_paras[0]).min()
+        part2 = (data['high_1minbar'].rolling(window_paras[0]).max() - data['low_1minbar'].rolling(window_paras[0]).min()) * 100
         res = 3 * (part1/part2).rolling(window_paras[1]).mean() - (2 * (part1/part2).rolling(1).mean().rolling(1).mean())
         return res.dropna()
     window_list = [[4,1],[6,3]]
@@ -339,13 +414,13 @@ for target in tqdm(target_list):
         temp = factor15(data['Close'],i)
         final_DF['factor15_'+str(i)] = temp
 
-    def factor17(series_list):   # 这个函数有问题
+    def factor17(series_list):
         """
         series_list 长度为3
         paras 长度为4
         """
         return ((series_list[0].shift(1) + series_list[1].shift(1) + 2 * series_list[2].shift(1)) / 4).dropna()
-    series_list = [data['High'],data['Low'],data['Close']]
+    series_list = [data['high_1minbar'],data['low_1minbar'],data['Close']]
     temp = factor17(series_list)
     final_DF['factor17_'+str(i)] = temp
 
@@ -376,7 +451,7 @@ for target in tqdm(target_list):
 
     def factor23(series_list):
         return ((series_list[0] + series_list[1] + series_list[2]) / 3 * series_list[3]).dropna()
-    temp = factor23([data['Close'],data['High'],data['Low'],data['Volume']])
+    temp = factor23([data['Close'],data['high_1minbar'],data['low_1minbar'],data['Volume']])
     final_DF['factor23'] = temp
 
     def factor24(series_list,paras):
@@ -391,20 +466,10 @@ for target in tqdm(target_list):
         return (final.rolling(paras).sum()).dropna()
     window_list = [5,20]
     for i in window_list:
-        temp = factor25([data['Close'], data['Low'], data['High'], data['Volume']], i)
+        temp = factor25([data['Close'], data['low_1minbar'], data['high_1minbar'], data['Volume']], i)
         final_DF['factor25_'+str(i)] = temp
 
-    def factor26(series_list,paras):    # 这个也有问题
-        """
-        paras:包含delay的参数
-        """
-        first_part = (series_list[0] + series_list[1]) / 2 - delay(series_list[0],paras[0]) + delay(series_list[1],paras[0]) / 2
-        snd_part = (series_list[0] - series_list[1]) / series_list[2]
-        res = (first_part * snd_part).dropna()
-        # res = sma(res,paras[1],paras[2])
-        res = res.rolling(window = 7, min_periods = 2).mean()
-        return res.dropna()
-    def factor26test(series_list,paras):
+    def factor26(series_list,paras):
         first_part = (series_list[0] + series_list[1]) / 2 - series_list[0].shift(paras[0]) + series_list[1].shift(
             paras[0]) / 2
         snd_part = (series_list[0] - series_list[1]) / series_list[2]
@@ -412,12 +477,14 @@ for target in tqdm(target_list):
         # res = sma(res,paras[1],paras[2])
         res = res.rolling(window=7, min_periods=2).mean()
         return res.dropna()
-    temp = factor26([data['High'],data['Low'],data['Volume']],[1,7,2])
-    temp1  = factor26test([data['High'],data['Low'],data['Volume']],[1,7,2])
+    # temp = factor26([data['high_1minbar'],data['low_1minbar'],data['Volume']],[1,7,2])
+    temp = factor26([data['high_1minbar'],data['low_1minbar'],data['Volume']],[1,7,2])
     final_DF['factor26'] = temp
     # final_DF = final_DF.dropna()
-
-    final_DF['target'] = final_DF['weighted_midprice'].diff() / final_DF['weighted_midprice']
+    # final_DF = final_DF.diff().dropna()
+    # target序列的单独构建
+    # final_DF['target'] = final_DF['midprice'].diff() / final_DF['midprice']
+    # final_DF['target'] = final_DF['midprice'].diff()
     final_DF = final_DF.dropna()
     final_DF =final_DF.resample('15s').last().dropna()
 
@@ -432,7 +499,11 @@ for target in tqdm(target_list):
     # 计算期货-ETF价差 2H- 1day
     C = (future_close.rolling(475).mean() / ETF_close.rolling(475).mean()).dropna()
     final_DF['spread'] = (future_close - C * ETF_close).dropna()
-    final_DF = final_DF.dropna()
+    final_DF['target'] = final_DF['midprice']
+    # temp_target = final_DF['target']
+    final_DF.drop(labels=['midprice'], axis=1, inplace=True)
+    # final_DF.insert(len(final_DF.columns), 'target', temp_target)
     print(final_DF.shape)
+    final_DF = final_DF.diff().dropna()
     final_DF.to_csv('../Clean_data/' + target + '.csv')
     print('Finish' + target + 'feature construction')
